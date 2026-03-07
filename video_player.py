@@ -18,6 +18,7 @@ class VideoPlayerWidget(QLabel):
         self.setMinimumSize(640, 480)
 
         self._tracking_mode = False
+        self._playback_paused = True
         self._drag_start: Optional[QPoint] = None
         self._drag_current: Optional[QPoint] = None
         self._search_rect: Optional[Tuple[int, int, int, int]] = None
@@ -144,6 +145,9 @@ class VideoPlayerWidget(QLabel):
         return ((wx - self._offset_x) / self._scale,
                 (wy - self._offset_y) / self._scale)
 
+    def set_paused(self, paused: bool):
+        self._playback_paused = paused
+
     def set_tracking_mode(self, enabled: bool):
         self._tracking_mode = enabled
         self._drag_start = None
@@ -180,6 +184,7 @@ class VideoPlayerWidget(QLabel):
             self._drag_current = None
             if w > 8 and h > 8:
                 self.roi_selected.emit(x, y, w, h)
-            else:
+            elif self._playback_paused:
+                # Single click → manual center override, only when paused
                 cx, cy = self._widget_to_video(e.position().x(), e.position().y())
                 self.point_selected.emit(int(cx), int(cy))

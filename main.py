@@ -328,11 +328,13 @@ class MainWindow(QMainWindow):
             return
         self.is_playing = True
         self.play_pause_btn.setText("⏸")
+        self.video_player.set_paused(False)
         self.timer.start()
 
     def _pause(self):
         self.is_playing = False
         self.play_pause_btn.setText("▶")
+        self.video_player.set_paused(True)
         self.timer.stop()
 
     def _on_slider_changed(self, value: int):
@@ -389,6 +391,8 @@ class MainWindow(QMainWindow):
         if self.tracking_mode and self.current_frame_idx in self.tracking_overlays:
             sr, mr, lost = self.tracking_overlays[self.current_frame_idx]
             self.video_player.set_tracking_overlays(sr, mr, lost=lost)
+            if lost and self.is_playing:
+                self._pause()
         else:
             self.video_player.set_tracking_overlays(None, None)
 
