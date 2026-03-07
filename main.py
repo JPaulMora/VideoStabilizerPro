@@ -372,6 +372,11 @@ class MainWindow(QMainWindow):
         self._slider_updating = True
         self.frame_slider.setValue(self.current_frame_idx)
         self._slider_updating = False
+        # Auto-pause on lost tracking frames regardless of tracking_mode checkbox
+        if self.current_frame_idx in self.tracking_overlays:
+            _, _, lost = self.tracking_overlays[self.current_frame_idx]
+            if lost:
+                self._pause()
         self._render_frame(frame)
 
     def _render_frame(self, frame_bgr: np.ndarray):
@@ -391,8 +396,6 @@ class MainWindow(QMainWindow):
         if self.tracking_mode and self.current_frame_idx in self.tracking_overlays:
             sr, mr, lost = self.tracking_overlays[self.current_frame_idx]
             self.video_player.set_tracking_overlays(sr, mr, lost=lost)
-            if lost and self.is_playing:
-                self._pause()
         else:
             self.video_player.set_tracking_overlays(None, None)
 
