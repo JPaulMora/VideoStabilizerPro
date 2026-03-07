@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
         # --- Content area ---
         content = QFrame()
         content.setObjectName("content")
-content_layout = QVBoxLayout(content)
+        content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
