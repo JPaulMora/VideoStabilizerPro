@@ -362,7 +362,7 @@ class MainWindow(QMainWindow):
             self._render_frame(frame)
 
     def _advance_frame(self):
-        if not self.cap:
+        if not self.cap or not self.is_playing:
             return
         ret, frame = self.cap.read()
         if not ret:
@@ -372,12 +372,13 @@ class MainWindow(QMainWindow):
         self._slider_updating = True
         self.frame_slider.setValue(self.current_frame_idx)
         self._slider_updating = False
-        # Auto-pause on lost tracking frames regardless of tracking_mode checkbox
+        self._render_frame(frame)
+        # Auto-pause on lost tracking frames — runs after render so the
+        # lost frame is visible when playback stops
         if self.current_frame_idx in self.tracking_overlays:
             _, _, lost = self.tracking_overlays[self.current_frame_idx]
             if lost:
                 self._pause()
-        self._render_frame(frame)
 
     def _render_frame(self, frame_bgr: np.ndarray):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
