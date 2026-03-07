@@ -2,17 +2,19 @@ import sys
 import csv
 import cv2
 import numpy as np
+from typing import Dict, Tuple, Optional
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout,
     QVBoxLayout, QPushButton, QLabel, QFrame,
     QFileDialog, QSlider, QRadioButton, QButtonGroup,
-    QSizePolicy, QLineEdit
+    QSizePolicy, QLineEdit, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer
 from video_player import VideoPlayerWidget
 from crop_canvas import CropCanvasWidget
 import video_exporter
+from tracking_engine import TrackingEngine, TrackingLostError
 
 BUTTON_STYLE = """
     QPushButton {
@@ -58,6 +60,12 @@ class MainWindow(QMainWindow):
         # Canvas size state
         self.crop_w = 400
         self.crop_h = 400
+
+        # Tracking state
+        self.tracking_engine = TrackingEngine()
+        self.tracking_mode = False
+        self.tracking_overlays: Dict[int, Tuple] = {}
+        self._template_frame_idx: Optional[int] = None
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._advance_frame)
@@ -166,6 +174,31 @@ class MainWindow(QMainWindow):
             if lbl.text() in ("W:", "H:"):
                 lbl.setStyleSheet("color: #cdd6f4; font-size: 13px;")
 
+        # --- Tracking section ---
+        tracking_sep = QLabel("Tracking")
+        tracking_sep.setStyleSheet("color: #6c7086; font-size: 11px; padding: 8px 0 4px 0;")
+        sidebar_layout.addWidget(tracking_sep)
+
+        self.tracking_check = QCheckBox("Tracking mode")
+        self.tracking_check.setStyleSheet("color: #cdd6f4; font-size: 13px;")
+        self.tracking_check.toggled.connect(self._on_tracking_toggled)
+        sidebar_layout.addWidget(self.tracking_check)
+
+        self.tracking_status = QLabel("No template")
+        self.tracking_status.setStyleSheet("color: #6c7086; font-size: 11px; padding: 2px 0;")
+        self.tracking_status.setWordWrap(True)
+        sidebar_layout.addWidget(self.tracking_status)
+
+        self.run_tracking_btn = QPushButton("Run Tracking")
+        self.run_tracking_btn.setStyleSheet(BUTTON_STYLE)
+        self.run_tracking_btn.clicked.connect(self._run_tracking)
+        sidebar_layout.addWidget(self.run_tracking_btn)
+
+        self.export_stabilized_btn = QPushButton("Export Stabilized")
+        self.export_stabilized_btn.setStyleSheet(BUTTON_STYLE)
+        self.export_stabilized_btn.clicked.connect(self._on_export_stabilized)
+        sidebar_layout.addWidget(self.export_stabilized_btn)
+
         sidebar_layout.addStretch()
 
         # Export button
@@ -188,6 +221,8 @@ class MainWindow(QMainWindow):
 
         self.video_player = VideoPlayerWidget()
         self.video_player.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_player.roi_selected.connect(self._on_roi_selected)
+        self.video_player.point_selected.connect(self._on_manual_center)
         viewer_row.addWidget(self.video_player, stretch=1)
 
         self.crop_canvas = CropCanvasWidget()
@@ -350,6 +385,13 @@ class MainWindow(QMainWindow):
             px, py = frame_w / 2, frame_h / 2
 
         use_center = self.center_radio.isChecked()
+
+        if self.tracking_mode and self.current_frame_idx in self.tracking_overlays:
+            sr, mr, lost = self.tracking_overlays[self.current_frame_idx]
+            self.video_player.set_tracking_overlays(sr, mr, lost=lost)
+        else:
+            self.video_player.set_tracking_overlays(None, None)
+
         self.video_player.show_frame(frame_rgb, px, py, use_center,
                                      crop_w=self.crop_w, crop_h=self.crop_h)
         self.crop_canvas.show_frame(frame_rgb, px, py, use_center)
@@ -428,6 +470,107 @@ class MainWindow(QMainWindow):
         self.export_btn.setEnabled(True)
         self._seek_frame(saved_idx)
         self.frame_input.setText(str(saved_idx))
+
+    # --- Tracking ---
+
+    def _on_tracking_toggled(self, checked: bool):
+        self.tracking_mode = checked
+        self.video_player.set_tracking_mode(checked)
+        if self.cap:
+            self._seek_frame(self.current_frame_idx)
+
+    def _on_roi_selected(self, x: int, y: int, w: int, h: int):
+        if not self.cap:
+            return
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
+        ret, frame_bgr = self.cap.read()
+        if not ret:
+            return
+        self.tracking_engine.set_template(frame_bgr, (x, y, w, h))
+        self._template_frame_idx = self.current_frame_idx
+        self.tracking_status.setText(f"Template @ frame {self.current_frame_idx}")
+        self.tracking_status.setStyleSheet("color: #a6e3a1; font-size: 11px; padding: 2px 0;")
+
+    def _run_tracking(self):
+        if not self.video_path or not self.tracking_engine.has_template:
+            return
+        self.run_tracking_btn.setEnabled(False)
+        self.tracking_engine.reset_position()
+        cap = cv2.VideoCapture(self.video_path)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.points = {}
+        self.tracking_overlays = {}
+        last_good_center = self.tracking_engine.reference_center
+        lost_count = 0
+
+        for i in range(total):
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            try:
+                r = self.tracking_engine.track_frame(frame_bgr)
+                self.points[i] = r.center
+                self.tracking_overlays[i] = (r.search_rect, r.match_rect, False)
+                last_good_center = r.center
+                if lost_count:
+                    lost_count = 0
+                    self.tracking_status.setText(f"Recovered at frame {i}")
+                    self.tracking_status.setStyleSheet(
+                        "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
+            except TrackingLostError:
+                lost_count += 1
+                self.points[i] = last_good_center
+                self.tracking_overlays[i] = (None, None, True)
+                self.tracking_engine.previous_center = last_good_center
+                self.tracking_status.setText(f"Lost x{lost_count} (frame {i})")
+                self.tracking_status.setStyleSheet(
+                    "color: #fab387; font-size: 11px; padding: 2px 0;")
+
+            if i % 30 == 0:
+                self.frame_input.setText(f"Tracking {i}/{total}")
+                QApplication.processEvents()
+
+        cap.release()
+        self.run_tracking_btn.setEnabled(True)
+        if lost_count == 0:
+            self.tracking_status.setText(f"Done — {total} frames tracked")
+            self.tracking_status.setStyleSheet(
+                "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
+        self._seek_frame(self.current_frame_idx)
+
+    def _on_export_stabilized(self):
+        if not self.video_path or not self.tracking_engine.has_template or not self.points:
+            return
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Stabilized Video", "stabilized.mp4", "MP4 Files (*.mp4)"
+        )
+        if not out_path:
+            return
+
+        self.export_stabilized_btn.setEnabled(False)
+        saved_idx = self.current_frame_idx
+
+        def progress_cb(i, total):
+            self.frame_input.setText(f"Stabilizing {i}/{total}")
+            QApplication.processEvents()
+
+        video_exporter.export_stabilized(
+            self.video_path,
+            out_path,
+            self.points,
+            self.tracking_engine.reference_center,
+            progress_cb,
+        )
+
+        self.export_stabilized_btn.setEnabled(True)
+        self._seek_frame(saved_idx)
+        self.frame_input.setText(str(saved_idx))
+
+    def _on_manual_center(self, x: int, y: int):
+        self.points[self.current_frame_idx] = (float(x), float(y))
+        self.tracking_status.setText(f"Manual point @ frame {self.current_frame_idx}")
+        self.tracking_status.setStyleSheet("color: #89dceb; font-size: 11px; padding: 2px 0;")
+        self._seek_frame(self.current_frame_idx)
 
     def closeEvent(self, event):
         self.timer.stop()

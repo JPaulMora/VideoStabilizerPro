@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from typing import Dict, Tuple, Callable, Optional
+from stabilizer import stabilize_frame
 
 
 def extract_crop(frame_rgb, px, py, crop_w, crop_h, use_center):
@@ -49,6 +50,39 @@ def export_video(
         px, py = points.get(i, fallback)
         crop = extract_crop(frame_rgb, px, py, crop_w, crop_h, use_center)
         writer.write(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+        if progress_cb and i % 30 == 0:
+            progress_cb(i, total)
+
+    writer.release()
+    cap.release()
+
+
+def export_stabilized(
+    src_path: str,
+    out_path: str,
+    points: Dict[int, Tuple[float, float]],
+    reference_center: Tuple[float, float],
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+) -> None:
+    """Re-reads src_path, stabilizes each frame using stored points, writes out_path."""
+    cap = cv2.VideoCapture(src_path)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    ref_cx, ref_cy = reference_center
+    fallback = reference_center
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(out_path, fourcc, fps, (fw, fh))
+
+    for i in range(total):
+        ret, frame_bgr = cap.read()
+        if not ret:
+            break
+        cx, cy = points.get(i, fallback)
+        dx, dy = cx - ref_cx, cy - ref_cy
+        writer.write(stabilize_frame(frame_bgr, dx, dy, reference_center))
         if progress_cb and i % 30 == 0:
             progress_cb(i, total)
 
