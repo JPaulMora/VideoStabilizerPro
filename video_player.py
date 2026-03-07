@@ -11,7 +11,7 @@ class VideoPlayerWidget(QLabel):
         self.setScaledContents(False)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("QLabel { background-color: black; }")
-        self.setMinimumSize(200, 150)
+        self.setMinimumSize(640, 480)
 
     def show_frame(self, frame: np.ndarray, px: float, py: float,
                    use_center: bool, crop_w: int = 400, crop_h: int = 400):
