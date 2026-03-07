@@ -13,6 +13,7 @@ class CropCanvasWidget(QLabel):
         self.crop_h = 400
         self._current_canvas = None
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setMinimumSize(1, 1)
         self.setMaximumSize(self.crop_w, self.crop_h)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._show_blank()
