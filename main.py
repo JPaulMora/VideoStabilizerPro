@@ -7,11 +7,12 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout,
     QVBoxLayout, QPushButton, QLabel, QFrame,
     QFileDialog, QSlider, QRadioButton, QButtonGroup,
-    QSizePolicy
+    QSizePolicy, QLineEdit
 )
 from PyQt6.QtCore import Qt, QTimer
 from video_player import VideoPlayerWidget
 from crop_canvas import CropCanvasWidget
+import video_exporter
 
 BUTTON_STYLE = """
     QPushButton {
@@ -27,6 +28,17 @@ BUTTON_STYLE = """
     QPushButton:pressed { background-color: #585b70; }
 """
 
+INPUT_STYLE = """
+    QLineEdit {
+        background-color: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font-size: 13px;
+    }
+"""
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -36,11 +48,16 @@ class MainWindow(QMainWindow):
 
         # Playback state
         self.cap = None
+        self.video_path = None
         self.points = {}
         self.total_frames = 0
         self.current_frame_idx = 0
         self.is_playing = False
         self._slider_updating = False
+
+        # Canvas size state
+        self.crop_w = 400
+        self.crop_h = 400
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._advance_frame)
@@ -57,7 +74,7 @@ class MainWindow(QMainWindow):
 
         # --- Sidebar ---
         sidebar = QFrame()
-        sidebar.setFixedWidth(200)
+        sidebar.setFixedWidth(210)
         sidebar.setObjectName("sidebar")
         sidebar.setStyleSheet("""
             #sidebar {
@@ -102,11 +119,65 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addWidget(self.center_radio)
         sidebar_layout.addWidget(topleft_radio)
+
+        # --- Canvas Size section ---
+        canvas_sep = QLabel("Canvas Size")
+        canvas_sep.setStyleSheet("color: #6c7086; font-size: 11px; padding: 8px 0 4px 0;")
+        sidebar_layout.addWidget(canvas_sep)
+
+        wh_row = QHBoxLayout()
+        wh_row.setSpacing(4)
+        wh_row.addWidget(QLabel("W:"))
+        self.canvas_w_input = QLineEdit("400")
+        self.canvas_w_input.setFixedWidth(50)
+        self.canvas_w_input.setStyleSheet(INPUT_STYLE)
+        self.canvas_w_input.returnPressed.connect(self._apply_canvas_size)
+        wh_row.addWidget(self.canvas_w_input)
+        wh_row.addWidget(QLabel("H:"))
+        self.canvas_h_input = QLineEdit("400")
+        self.canvas_h_input.setFixedWidth(50)
+        self.canvas_h_input.setStyleSheet(INPUT_STYLE)
+        self.canvas_h_input.returnPressed.connect(self._apply_canvas_size)
+        wh_row.addWidget(self.canvas_h_input)
+        swap_btn = QPushButton("⇄")
+        swap_btn.setFixedWidth(30)
+        swap_btn.setStyleSheet(BUTTON_STYLE)
+        swap_btn.clicked.connect(self._swap_canvas_size)
+        wh_row.addWidget(swap_btn)
+
+        for lbl in sidebar.findChildren(QLabel):
+            if lbl.text() in ("W:", "H:"):
+                lbl.setStyleSheet("color: #cdd6f4; font-size: 13px;")
+
+        sidebar_layout.addLayout(wh_row)
+
+        templates_row = QHBoxLayout()
+        templates_row.setSpacing(4)
+        for label, w, h in [("1:1", 400, 400), ("4:3", 400, 300), ("16:9", 400, 225), ("9:16", 225, 400)]:
+            btn = QPushButton(label)
+            btn.setStyleSheet(BUTTON_STYLE)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda *_, _w=w, _h=h: self._set_canvas_preset(_w, _h))
+            templates_row.addWidget(btn)
+        sidebar_layout.addLayout(templates_row)
+
+        # Fix W:/H: label colors after adding to sidebar
+        for lbl in sidebar.findChildren(QLabel):
+            if lbl.text() in ("W:", "H:"):
+                lbl.setStyleSheet("color: #cdd6f4; font-size: 13px;")
+
         sidebar_layout.addStretch()
+
+        # Export button
+        self.export_btn = QPushButton("Export Video")
+        self.export_btn.setStyleSheet(BUTTON_STYLE)
+        self.export_btn.clicked.connect(self._on_export_video)
+        sidebar_layout.addWidget(self.export_btn)
 
         # --- Content area ---
         content = QFrame()
         content.setObjectName("content")
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
@@ -141,10 +212,16 @@ class MainWindow(QMainWindow):
         self.frame_slider.valueChanged.connect(self._on_slider_changed)
         controls_row.addWidget(self.frame_slider, stretch=1)
 
-        self.frame_label = QLabel("0 / 0")
-        self.frame_label.setStyleSheet("color: #cdd6f4; font-size: 13px; min-width: 80px;")
-        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        controls_row.addWidget(self.frame_label)
+        self.frame_input = QLineEdit("0")
+        self.frame_input.setFixedWidth(60)
+        self.frame_input.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.frame_input.setStyleSheet(INPUT_STYLE)
+        self.frame_input.returnPressed.connect(self._on_frame_input)
+        controls_row.addWidget(self.frame_input)
+
+        self.frame_total_label = QLabel("/ 0")
+        self.frame_total_label.setStyleSheet("color: #cdd6f4; font-size: 13px; min-width: 60px;")
+        controls_row.addWidget(self.frame_total_label)
 
         controls_widget = QWidget()
         controls_widget.setStyleSheet("background-color: #1e1e2e; border-top: 1px solid #313244;")
@@ -175,6 +252,7 @@ class MainWindow(QMainWindow):
     def _load_video(self, path: str):
         if self.cap:
             self.cap.release()
+        self.video_path = path
         self.cap = cv2.VideoCapture(path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
@@ -229,6 +307,15 @@ class MainWindow(QMainWindow):
         self._pause()
         self._seek_frame(value)
 
+    def _on_frame_input(self):
+        try:
+            idx = int(self.frame_input.text())
+        except ValueError:
+            return
+        idx = max(0, min(idx, self.total_frames - 1))
+        self._pause()
+        self._seek_frame(idx)
+
     def _seek_frame(self, idx: int):
         if not self.cap:
             return
@@ -264,22 +351,84 @@ class MainWindow(QMainWindow):
             px, py = frame_w / 2, frame_h / 2
 
         use_center = self.center_radio.isChecked()
-        self.video_player.show_frame(frame_rgb, px, py, use_center)
+        self.video_player.show_frame(frame_rgb, px, py, use_center,
+                                     crop_w=self.crop_w, crop_h=self.crop_h)
         self.crop_canvas.show_frame(frame_rgb, px, py, use_center)
-        self.frame_label.setText(f"{self.current_frame_idx} / {self.total_frames}")
+
+        if not self.frame_input.hasFocus():
+            self.frame_input.setText(str(self.current_frame_idx))
+        self.frame_total_label.setText(f"/ {self.total_frames}")
 
     def _on_mode_changed(self):
-        # Re-render current frame with new mode
         if not self.cap:
             return
         pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-        seek_to = max(0, self.current_frame_idx)
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, seek_to)
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
         ret, frame = self.cap.read()
         if ret:
             self._render_frame(frame)
-        # Restore position
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+
+    # --- Canvas size ---
+
+    def _apply_canvas_size(self):
+        try:
+            w = max(10, int(self.canvas_w_input.text()))
+            h = max(10, int(self.canvas_h_input.text()))
+        except ValueError:
+            return
+        self.crop_w = w
+        self.crop_h = h
+        self.crop_canvas.resize_canvas(w, h)
+        self._on_mode_changed()
+
+    def _swap_canvas_size(self):
+        w = self.canvas_w_input.text()
+        h = self.canvas_h_input.text()
+        self.canvas_w_input.setText(h)
+        self.canvas_h_input.setText(w)
+        self._apply_canvas_size()
+
+    def _set_canvas_preset(self, w: int, h: int):
+        self.canvas_w_input.setText(str(w))
+        self.canvas_h_input.setText(str(h))
+        self._apply_canvas_size()
+
+    # --- Export ---
+
+    def _on_export_video(self):
+        if not self.cap or not self.video_path:
+            return
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Video", "export.mp4", "MP4 Files (*.mp4)"
+        )
+        if not out_path:
+            return
+
+        self.play_pause_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+
+        use_center = self.center_radio.isChecked()
+        saved_idx = self.current_frame_idx
+
+        def progress_cb(i, total):
+            self.frame_input.setText(f"Exporting {i}/{total}")
+            QApplication.processEvents()
+
+        video_exporter.export_video(
+            self.video_path,
+            out_path,
+            self.points,
+            self.crop_w,
+            self.crop_h,
+            use_center,
+            progress_cb,
+        )
+
+        self.play_pause_btn.setEnabled(True)
+        self.export_btn.setEnabled(True)
+        self._seek_frame(saved_idx)
+        self.frame_input.setText(str(saved_idx))
 
     def closeEvent(self, event):
         self.timer.stop()

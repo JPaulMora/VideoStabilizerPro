@@ -11,10 +11,10 @@ class VideoPlayerWidget(QLabel):
         self.setScaledContents(False)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("QLabel { background-color: black; }")
-        self.setMinimumSize(640, 480)
+        self.setMinimumSize(200, 150)
 
     def show_frame(self, frame: np.ndarray, px: float, py: float,
-                   use_center: bool, crop_size: int = 400):
+                   use_center: bool, crop_w: int = 400, crop_h: int = 400):
         frame_h, frame_w = frame.shape[:2]
 
         # Scale to fit widget while preserving aspect ratio
@@ -47,9 +47,8 @@ class VideoPlayerWidget(QLabel):
 
         # Compute crop box source coords
         if use_center:
-            half = crop_size // 2
-            src_x1 = px - half
-            src_y1 = py - half
+            src_x1 = px - crop_w // 2
+            src_y1 = py - crop_h // 2
         else:
             src_x1 = px
             src_y1 = py
@@ -57,8 +56,8 @@ class VideoPlayerWidget(QLabel):
         # Map to display coords
         box_x = int(src_x1 * scale) + offset_x
         box_y = int(src_y1 * scale) + offset_y
-        box_w = int(crop_size * scale)
-        box_h = int(crop_size * scale)
+        box_w = int(crop_w * scale)
+        box_h = int(crop_h * scale)
 
         # Draw yellow crop box
         pen = QPen(QColor(255, 220, 0))
