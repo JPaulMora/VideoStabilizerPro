@@ -66,6 +66,7 @@ class MainWindow(QMainWindow):
         self.tracking_mode = False
         self.tracking_overlays: Dict[int, Tuple] = {}
         self._template_frame_idx: Optional[int] = None
+        self._tracking_resume_frame: Optional[int] = None  # frame to resume from after manual fix
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._advance_frame)
@@ -502,16 +503,28 @@ class MainWindow(QMainWindow):
     def _run_tracking(self):
         if not self.video_path or not self.tracking_engine.has_template:
             return
+
+        # Determine start frame: either fresh run or resuming after a manual fix
+        resume_from = self._tracking_resume_frame
+        if resume_from is not None:
+            start_frame = resume_from + 1
+            # Use the manually corrected point as the new search origin
+            corrected = self.points.get(resume_from, self.tracking_engine.reference_center)
+            self.tracking_engine.previous_center = corrected
+            self._tracking_resume_frame = None
+        else:
+            start_frame = 0
+            self.tracking_engine.reset_position()
+            self.points = {}
+            self.tracking_overlays = {}
+
         self.run_tracking_btn.setEnabled(False)
-        self.tracking_engine.reset_position()
         cap = cv2.VideoCapture(self.video_path)
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.points = {}
-        self.tracking_overlays = {}
-        last_good_center = self.tracking_engine.reference_center
-        lost_count = 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        for i in range(total):
+        stopped_at = None
+        for i in range(start_frame, total):
             ret, frame_bgr = cap.read()
             if not ret:
                 break
@@ -519,26 +532,34 @@ class MainWindow(QMainWindow):
                 r = self.tracking_engine.track_frame(frame_bgr)
                 self.points[i] = r.center
                 self.tracking_overlays[i] = (r.search_rect, r.match_rect, False)
-                last_good_center = r.center
-                if lost_count:
-                    lost_count = 0
-                    self.tracking_status.setText(f"Recovered at frame {i}")
-                    self.tracking_status.setStyleSheet(
-                        "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
             except TrackingLostError:
-                lost_count += 1
-                self.points[i] = last_good_center
+                # Stop immediately — show the frame, let user fix and resume
+                self.points[i] = self.tracking_engine.previous_center
                 self.tracking_overlays[i] = (None, None, True)
-                self.tracking_engine.previous_center = last_good_center
-                self.tracking_status.setText(f"Lost x{lost_count} (frame {i})")
+                self._tracking_resume_frame = i
+                stopped_at = i
+
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                px, py = self.points[i]
+                self.video_player.set_tracking_overlays(None, None, lost=True)
+                self.video_player.show_frame(frame_rgb, px, py,
+                                             self.center_radio.isChecked(),
+                                             crop_w=self.crop_w, crop_h=self.crop_h)
+                self.current_frame_idx = i
+                self._slider_updating = True
+                self.frame_slider.setValue(i)
+                self._slider_updating = False
+                self.frame_input.setText(str(i))
+                self.tracking_status.setText(
+                    f"Lost at frame {i} — click to fix, then Run Tracking to continue")
                 self.tracking_status.setStyleSheet(
                     "color: #fab387; font-size: 11px; padding: 2px 0;")
+                break
 
             if i % 5 == 0:
-                # Update video player live so tracking progress is visible
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                px, py = self.points.get(i, self.tracking_engine.reference_center)
-                sr, mr, lost = self.tracking_overlays.get(i, (None, None, False))
+                px, py = self.points[i]
+                sr, mr, lost = self.tracking_overlays[i]
                 self.video_player.set_tracking_overlays(sr, mr, lost=lost)
                 self.video_player.show_frame(frame_rgb, px, py,
                                              self.center_radio.isChecked(),
@@ -552,12 +573,11 @@ class MainWindow(QMainWindow):
 
         cap.release()
         self.run_tracking_btn.setEnabled(True)
-        if lost_count == 0:
+
+        if stopped_at is None:
             self.tracking_status.setText(f"Done — {total} frames tracked")
             self.tracking_status.setStyleSheet(
                 "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
-        # Seek back to frame 0 so playback starts from the beginning
-        self._seek_frame(0)
 
     def _on_export_stabilized(self):
         if not self.video_path or not self.tracking_engine.has_template or not self.points:
@@ -589,7 +609,11 @@ class MainWindow(QMainWindow):
 
     def _on_manual_center(self, x: int, y: int):
         self.points[self.current_frame_idx] = (float(x), float(y))
-        self.tracking_status.setText(f"Manual point @ frame {self.current_frame_idx}")
+        # If this is the stopped frame, prime the engine so Resume starts from here
+        if self.current_frame_idx == self._tracking_resume_frame:
+            self.tracking_engine.previous_center = (float(x), float(y))
+        self.tracking_status.setText(
+            f"Manual point @ frame {self.current_frame_idx} — Run Tracking to continue")
         self.tracking_status.setStyleSheet("color: #89dceb; font-size: 11px; padding: 2px 0;")
         self._seek_frame(self.current_frame_idx)
 
