@@ -530,7 +530,19 @@ class MainWindow(QMainWindow):
                 self.tracking_status.setStyleSheet(
                     "color: #fab387; font-size: 11px; padding: 2px 0;")
 
-            if i % 30 == 0:
+            if i % 5 == 0:
+                # Update video player live so tracking progress is visible
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                px, py = self.points.get(i, self.tracking_engine.reference_center)
+                sr, mr, lost = self.tracking_overlays.get(i, (None, None, False))
+                self.video_player.set_tracking_overlays(sr, mr, lost=lost)
+                self.video_player.show_frame(frame_rgb, px, py,
+                                             self.center_radio.isChecked(),
+                                             crop_w=self.crop_w, crop_h=self.crop_h)
+                self.current_frame_idx = i
+                self._slider_updating = True
+                self.frame_slider.setValue(i)
+                self._slider_updating = False
                 self.frame_input.setText(f"Tracking {i}/{total}")
                 QApplication.processEvents()
 
@@ -540,7 +552,8 @@ class MainWindow(QMainWindow):
             self.tracking_status.setText(f"Done — {total} frames tracked")
             self.tracking_status.setStyleSheet(
                 "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
-        self._seek_frame(self.current_frame_idx)
+        # Seek back to frame 0 so playback starts from the beginning
+        self._seek_frame(0)
 
     def _on_export_stabilized(self):
         if not self.video_path or not self.tracking_engine.has_template or not self.points:
