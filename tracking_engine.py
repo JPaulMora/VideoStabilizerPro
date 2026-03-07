@@ -32,7 +32,16 @@ class TrackingEngine:
         return self.template is not None
 
     def set_template(self, frame_bgr: np.ndarray, roi: Tuple[int, int, int, int]):
+        fh, fw = frame_bgr.shape[:2]
         x, y, w, h = roi
+        # Clamp to frame bounds — negative coords from letterbox drags cause
+        # numpy wrap-around slicing that produces empty or wrong-sized templates
+        x = max(0, min(x, fw - 1))
+        y = max(0, min(y, fh - 1))
+        w = min(w, fw - x)
+        h = min(h, fh - y)
+        if w <= 0 or h <= 0:
+            raise ValueError("ROI is outside frame bounds")
         self.template = frame_bgr[y:y + h, x:x + w].copy()
         cx, cy = x + w / 2, y + h / 2
         self.reference_center = (cx, cy)
@@ -59,7 +68,9 @@ class TrackingEngine:
         sy2 = min(fh, int(pcy + th // 2 + pad))
         search_region = frame_bgr[sy1:sy2, sx1:sx2]
 
-        # search region must be larger than template
+        # template or search region must be non-empty and search >= template
+        if th == 0 or tw == 0:
+            raise TrackingLostError("Template has zero dimension")
         if search_region.shape[0] < th or search_region.shape[1] < tw:
             raise TrackingLostError("Search region smaller than template")
 
