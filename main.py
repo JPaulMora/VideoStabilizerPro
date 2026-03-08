@@ -728,7 +728,7 @@ class MainWindow(QMainWindow):
         self._render_frame(self._current_frame_bgr)
 
     def _run_tracking(self):
-        if not self.video_path or not self.tracking_engine.has_template:
+        if not self.proxy_path or not self.tracking_engine.has_template:
             return
         # Stop regular playback timer but mark as "running" so pause button stops tracking
         self.timer.stop()
