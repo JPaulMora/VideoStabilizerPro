@@ -1,5 +1,6 @@
 import sys
 import csv
+import time
 import cv2
 import numpy as np
 from typing import Dict, Tuple, Optional
@@ -711,6 +712,8 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         stopped_at = None
+        _display_interval = 1.0 / 15   # target ~15 fps preview refresh
+        _last_display_t = 0.0
         for i in range(start_frame, total):
             ret, frame_bgr = cap.read()
             if not ret:
@@ -745,7 +748,9 @@ class MainWindow(QMainWindow):
                     "color: #fab387; font-size: 11px; padding: 2px 0;")
                 break
 
-            if i % 5 == 0:
+            now = time.monotonic()
+            if now - _last_display_t >= _display_interval:
+                _last_display_t = now
                 self._current_frame_bgr = frame_bgr
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 px, py = self.points[i]

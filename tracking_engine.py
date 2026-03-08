@@ -17,15 +17,12 @@ class TrackResult:
 
 
 class TrackingEngine:
-    def __init__(self, search_padding=50, confidence_threshold=0.7,
-                 template_update_interval=10):
+    def __init__(self, search_padding=100, confidence_threshold=0.7):
         self.search_padding = search_padding
         self.confidence_threshold = confidence_threshold
-        self.template_update_interval = template_update_interval
         self.template: Optional[np.ndarray] = None
         self.reference_center: Optional[Tuple] = None
         self.previous_center: Optional[Tuple] = None
-        self._frame_count = 0
 
     @property
     def has_template(self) -> bool:
@@ -51,7 +48,6 @@ class TrackingEngine:
     def reset_position(self):
         """Call before re-running tracking from the start."""
         self.previous_center = self.reference_center
-        self._frame_count = 0
 
     def track_frame(self, frame_bgr: np.ndarray) -> TrackResult:
         if self.template is None:
@@ -83,10 +79,6 @@ class TrackingEngine:
         match_x = sx1 + max_loc[0]
         match_y = sy1 + max_loc[1]
         center = (match_x + tw / 2, match_y + th / 2)
-
-        self._frame_count += 1
-        if self._frame_count % self.template_update_interval == 0 and score > 0.9:
-            self.template = frame_bgr[match_y:match_y + th, match_x:match_x + tw].copy()
 
         self.previous_center = center
 
