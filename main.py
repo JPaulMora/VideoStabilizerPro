@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("VideoStPro")
-        self.setMinimumSize(1100, 650)
+        self.setMinimumSize(1100, 750)
 
         # Playback state
         self.cap = None
@@ -687,7 +687,11 @@ class MainWindow(QMainWindow):
     def _run_tracking(self):
         if not self.video_path or not self.tracking_engine.has_template:
             return
-        self._pause()
+        # Stop regular playback timer but mark as "running" so pause button stops tracking
+        self.timer.stop()
+        self.is_playing = True
+        self.play_pause_btn.setText("⏸")
+        self.video_player.set_paused(False)
 
         # Determine start frame: either fresh run or resuming after a manual fix
         resume_from = self._tracking_resume_frame
@@ -757,15 +761,29 @@ class MainWindow(QMainWindow):
                 self.frame_input.setText(f"Tracking {i}/{total}")
                 self._update_tracking_range_bar()
                 QApplication.processEvents()
+                if not self.is_playing:
+                    break
 
         cap.release()
         self.run_tracking_btn.setEnabled(True)
         self._update_tracking_range_bar()
 
-        if stopped_at is None:
+        if stopped_at is not None:
+            pass  # status already set in the lost-tracking branch
+        elif self.is_playing:
             self.tracking_status.setText(f"Done — {total} frames tracked")
             self.tracking_status.setStyleSheet(
                 "color: #a6e3a1; font-size: 11px; padding: 2px 0;")
+        else:
+            # User pressed pause mid-run — prime resume so Run Tracking continues from here
+            self._tracking_resume_frame = self.current_frame_idx
+            if self.current_frame_idx in self.points:
+                self.tracking_engine.previous_center = self.points[self.current_frame_idx]
+            self.tracking_status.setText(
+                f"Paused at frame {self.current_frame_idx} — Run Tracking to continue")
+            self.tracking_status.setStyleSheet("color: #cdd6f4; font-size: 11px; padding: 2px 0;")
+
+        self._pause()
 
     def _on_manual_center(self, x: int, y: int):
         self.points[self.current_frame_idx] = (float(x), float(y))
