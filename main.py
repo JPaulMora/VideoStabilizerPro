@@ -749,7 +749,7 @@ class MainWindow(QMainWindow):
         self._update_tracking_range_bar()
 
         self.run_tracking_btn.setEnabled(False)
-        cap = cv2.VideoCapture(self.video_path)
+        cap = cv2.VideoCapture(self.proxy_path)
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
