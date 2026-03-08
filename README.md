@@ -4,9 +4,7 @@ This is a minimal requirements, purely Python based video stabilizer program. I 
 
 Below I share a simple UI demo, but you can also find the raw video and my prefered output within this repo.
 
-**[Watch the UI demo](UI%20Demo.mp4)**
-
-> To get an inline video player on GitHub, drag `UI Demo.mp4` into any issue/PR comment — GitHub will upload it to its CDN and give you a URL you can paste here in place of this link.
+https://raw.githubusercontent.com/JPaulMora/VideoStabilizerPro/refs/heads/main/UI%20Demo.mp4
 
 ---
 
