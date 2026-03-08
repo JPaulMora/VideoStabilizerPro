@@ -1,6 +1,7 @@
 venv/
 .DS_Store
 *.mp4
+!UI Demo.mp4
 *.csv
 *.mov
 cache/
