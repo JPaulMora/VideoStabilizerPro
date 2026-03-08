@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout,
     QVBoxLayout, QPushButton, QLabel, QFrame,
     QFileDialog, QSlider, QRadioButton, QButtonGroup,
-    QSizePolicy, QLineEdit, QCheckBox, QComboBox
+    QSizePolicy, QLineEdit, QCheckBox, QComboBox, QProgressDialog
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor
@@ -395,15 +395,22 @@ class MainWindow(QMainWindow):
         self.video_path = path
 
         # Build (or reuse) an MJPEG proxy so every cap.set(N) is exact
+        progress_dlg = QProgressDialog(
+            "Building MJPEG proxy for accurate seeking…", None, 0, 100, self
+        )
+        progress_dlg.setWindowTitle("Converting video")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumWidth(340)
+        progress_dlg.setValue(0)
+        progress_dlg.show()
+
         def _proxy_progress(current, total):
-            self.frame_input.setText(f"Proxy {current}/{total}")
-            self.tracking_status.setText("Building MJPEG proxy for accurate seeking…")
-            self.tracking_status.setStyleSheet(
-                "color: #cdd6f4; font-size: 11px; padding: 2px 0;")
+            pct = int(current / total * 100) if total else 100
+            progress_dlg.setValue(pct)
             QApplication.processEvents()
 
         self.proxy_path = ensure_proxy(path, progress_cb=_proxy_progress)
-        self.tracking_status.setText("")
+        progress_dlg.close()
 
         self.cap = cv2.VideoCapture(self.proxy_path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -640,8 +647,16 @@ class MainWindow(QMainWindow):
         self.export_btn.setEnabled(False)
         saved_idx = self.current_frame_idx
 
+        export_dlg = QProgressDialog("Exporting…", None, 0, 100, self)
+        export_dlg.setWindowTitle("Exporting video")
+        export_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        export_dlg.setMinimumWidth(300)
+        export_dlg.setValue(0)
+        export_dlg.show()
+
         def progress_cb(i, total):
-            self.frame_input.setText(f"Exporting {i}/{total}")
+            pct = int(i / total * 100) if total else 100
+            export_dlg.setValue(pct)
             QApplication.processEvents()
 
         if original:
@@ -655,6 +670,7 @@ class MainWindow(QMainWindow):
                 self.crop_w, self.crop_h, self.center_radio.isChecked(), progress_cb,
             )
 
+        export_dlg.close()
         self.export_btn.setEnabled(True)
         self._seek_frame(saved_idx)
         self.frame_input.setText(str(saved_idx))
