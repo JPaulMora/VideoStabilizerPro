@@ -1,6 +1,5 @@
 import sys
 import csv
-import time
 import os
 from datetime import datetime
 import cv2
@@ -720,8 +719,6 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         stopped_at = None
-        _display_interval = 1.0 / 15   # target ~15 fps preview refresh
-        _last_display_t = 0.0
         for i in range(start_frame, total):
             ret, frame_bgr = cap.read()
             if not ret:
@@ -745,6 +742,7 @@ class MainWindow(QMainWindow):
                 self.video_player.show_frame(frame_rgb, px, py,
                                              self.center_radio.isChecked(),
                                              crop_w=self.crop_w, crop_h=self.crop_h)
+                self.video_player.repaint()
                 self.current_frame_idx = i
                 self._slider_updating = True
                 self.frame_slider.setValue(i)
@@ -756,26 +754,24 @@ class MainWindow(QMainWindow):
                     "color: #fab387; font-size: 11px; padding: 2px 0;")
                 break
 
-            now = time.monotonic()
-            if now - _last_display_t >= _display_interval:
-                _last_display_t = now
-                self._current_frame_bgr = frame_bgr
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                px, py = self.points[i]
-                sr, mr, lost = self.tracking_overlays[i]
-                self.video_player.set_tracking_overlays(sr, mr, lost=lost)
-                self.video_player.show_frame(frame_rgb, px, py,
-                                             self.center_radio.isChecked(),
-                                             crop_w=self.crop_w, crop_h=self.crop_h)
-                self.current_frame_idx = i
-                self._slider_updating = True
-                self.frame_slider.setValue(i)
-                self._slider_updating = False
-                self.frame_input.setText(f"Tracking {i}/{total}")
-                self._update_tracking_range_bar()
-                QApplication.processEvents()
-                if not self.is_playing:
-                    break
+            self._current_frame_bgr = frame_bgr
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            px, py = self.points[i]
+            sr, mr, lost = self.tracking_overlays[i]
+            self.video_player.set_tracking_overlays(sr, mr, lost=lost)
+            self.video_player.show_frame(frame_rgb, px, py,
+                                         self.center_radio.isChecked(),
+                                         crop_w=self.crop_w, crop_h=self.crop_h)
+            self.video_player.repaint()
+            self.current_frame_idx = i
+            self._slider_updating = True
+            self.frame_slider.setValue(i)
+            self._slider_updating = False
+            self.frame_input.setText(f"Tracking {i}/{total}")
+            self._update_tracking_range_bar()
+            QApplication.processEvents()
+            if not self.is_playing:
+                break
 
         cap.release()
         self.run_tracking_btn.setEnabled(True)
