@@ -1,6 +1,8 @@
 import sys
 import csv
 import time
+import os
+from datetime import datetime
 import cv2
 import numpy as np
 from typing import Dict, Tuple, Optional
@@ -586,8 +588,11 @@ class MainWindow(QMainWindow):
     def _on_export_csv(self):
         if not self.points:
             return
+        stem = os.path.splitext(os.path.basename(self.video_path or "tracking"))[0]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{stem}_{ts}.csv"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export CSV", "tracking.csv", "CSV Files (*.csv)"
+            self, "Export CSV", default_name, "CSV Files (*.csv)"
         )
         if not path:
             return
@@ -605,8 +610,11 @@ class MainWindow(QMainWindow):
         if original and (not self.tracking_engine.has_template or not self.points):
             return
 
+        stem = os.path.splitext(os.path.basename(self.video_path or "export"))[0]
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{stem}_{ts}.mp4"
         out_path, _ = QFileDialog.getSaveFileName(
-            self, "Export", "export.mp4", "MP4 Files (*.mp4)"
+            self, "Export", default_name, "MP4 Files (*.mp4)"
         )
         if not out_path:
             return
