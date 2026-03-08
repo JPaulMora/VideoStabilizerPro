@@ -54,3 +54,7 @@ class CropCanvasWidget(QLabel):
         canvas = extract_crop(frame, px, py, self.crop_w, self.crop_h, use_center)
         self._current_canvas = canvas
         self._render_canvas()
+
+    def show_canvas(self, canvas: np.ndarray):
+        self._current_canvas = canvas
+        self._render_canvas()
