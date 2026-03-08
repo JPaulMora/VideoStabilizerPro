@@ -481,7 +481,12 @@ class MainWindow(QMainWindow):
         ret, frame = self.cap.read()
         if ret:
             self._current_frame_bgr = frame
-            self.current_frame_idx = idx
+            # Use the actual decoded position, not the requested idx — H.264
+            # seeks snap to keyframes so the returned frame may differ from idx
+            self.current_frame_idx = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            self._slider_updating = True
+            self.frame_slider.setValue(self.current_frame_idx)
+            self._slider_updating = False
             self._render_frame(frame)
 
     def _advance_frame(self):
