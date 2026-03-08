@@ -767,7 +767,7 @@ class MainWindow(QMainWindow):
             self._slider_updating = True
             self.frame_slider.setValue(i)
             self._slider_updating = False
-            self.frame_input.setText(f"Tracking {i}/{total}")
+            self.frame_input.setText(str(i))
             self._update_tracking_range_bar()
             QApplication.processEvents()
             if not self.is_playing:
