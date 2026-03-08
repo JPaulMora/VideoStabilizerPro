@@ -19,6 +19,7 @@ from crop_canvas import CropCanvasWidget
 import video_exporter
 from video_exporter import extract_crop
 from tracking_engine import TrackingEngine, TrackingLostError
+from proxy import ensure_proxy, proxy_path_for
 
 BUTTON_STYLE = """
     QPushButton {
@@ -106,7 +107,8 @@ class MainWindow(QMainWindow):
 
         # Playback state
         self.cap = None
-        self.video_path = None
+        self.video_path = None   # original source — used for export only
+        self.proxy_path = None   # MJPEG proxy — used for cap / tracking
         self.points = {}
         self._manual_frames: set = set()
         self.total_frames = 0
@@ -391,7 +393,19 @@ class MainWindow(QMainWindow):
         if self.cap:
             self.cap.release()
         self.video_path = path
-        self.cap = cv2.VideoCapture(path)
+
+        # Build (or reuse) an MJPEG proxy so every cap.set(N) is exact
+        def _proxy_progress(current, total):
+            self.frame_input.setText(f"Proxy {current}/{total}")
+            self.tracking_status.setText("Building MJPEG proxy for accurate seeking…")
+            self.tracking_status.setStyleSheet(
+                "color: #cdd6f4; font-size: 11px; padding: 2px 0;")
+            QApplication.processEvents()
+
+        self.proxy_path = ensure_proxy(path, progress_cb=_proxy_progress)
+        self.tracking_status.setText("")
+
+        self.cap = cv2.VideoCapture(self.proxy_path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
         self.timer.setInterval(int(1000 / fps))

@@ -2,3 +2,5 @@ venv/
 .DS_Store
 *.mp4
 *.csv
+*.mov
+cache/
