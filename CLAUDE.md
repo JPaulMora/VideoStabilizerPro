@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run the app
 python main.py
 
-# Run all tests (exclude venv)
-pytest test_*.py
+# Run all tests (exclude venv and test_vidstab.py — manual script)
+pytest test_image_sequence.py test_intermediate.py test_raw_transform.py test_stabilizer.py test_tracking_engine.py test_video_exporter.py
 
 # Run a single test file
 pytest test_tracking_engine.py
@@ -26,16 +26,21 @@ The app is a single-window PyQt6 desktop tool. `main.py` holds `MainWindow` and 
 
 ### Data flow
 
-1. User opens a video → `proxy.py` transcodes it to MJPEG (`cache/<name>_proxy.avi`) for frame-accurate seeking. `self.video_path` = original (export only). `self.proxy_path` = what the cap and tracker read from.
-2. User draws an ROI → `TrackingEngine.set_template()` stores the BGR crop and reference center.
-3. Auto-tracking (`_run_tracking`) or single-frame tracking (`_on_track_this_frame`) calls `TrackingEngine.track_frame()` on frames read from the proxy cap, writing results into `self.points: Dict[int, (float, float)]` and `self.tracking_overlays: Dict[int, (search_rect, match_rect, lost)]`.
-4. Export reads from `self.video_path` (original quality) and uses `self.points` to drive either `video_exporter.export_video` (crop follows point) or `video_exporter.export_stabilized` (full frame translated to lock point).
+1. **Video:** user opens a file → `proxy.py` builds MJPEG (`cache/<name>_proxy.avi`). `self.frame_source` is a `VideoFrameSource` on the proxy. Export reads the original file.
+2. **RAW sequence:** user opens a folder → `intermediate.py` demosaices each DNG to 16-bit TIFF in `cache/<folder>_decoded/` (see `manifest.json`). `SequenceFrameSource` drives playback/tracking. Export writes still folders (RGB TIFF and/or Bayer TIFF via integer transform replay on source DNGs).
+3. User draws an ROI → `TrackingEngine.set_template()` stores the BGR crop and reference center.
+4. Auto-tracking or single-frame tracking reads frames via `self.frame_source`, writing `self.points` and `self.tracking_overlays`.
+5. Export uses `self.points` — MP4 for video; `export_*_sequence` for RAW folders (`video_exporter.py` + `raw_transform.py`).
 
 ### Key state in MainWindow
 
 | Attribute | Purpose |
 |---|---|
-| `self.cap` | OpenCV cap on the proxy — used for all playback and seeking |
+| `self.frame_source` | `VideoFrameSource` or `SequenceFrameSource` — all playback and seeking |
+| `self.source_kind` | `"video"` or `"sequence"` |
+| `self.source_path` | Original video file or RAW folder (export) |
+| `self.intermediate_dir` | Decoded TIFF cache path (sequence only) |
+| `self.proxy_path` | MJPEG proxy path (video only) |
 | `self.points` | `{frame_idx: (px, py)}` — the tracking dataset; never cleared automatically |
 | `self.tracking_overlays` | Per-frame visual overlays (search rect, match rect, lost flag); not used for export |
 | `self._current_frame_bgr` | Cached last decoded frame; used by single-frame tracking and manual point to avoid re-seeking |
@@ -44,7 +49,7 @@ The app is a single-window PyQt6 desktop tool. `main.py` holds `MainWindow` and 
 
 ### Seeking correctness
 
-`cap.set(N) + cap.read()` on H.264 is non-deterministic (snaps to keyframes). The MJPEG proxy makes every seek exact. After any `cap.read()`, always derive the true frame index as `int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1` — do not trust the requested index. This pattern is used in both `_seek_frame` and `_advance_frame`.
+For **video**, H.264 seeking is non-deterministic without the MJPEG proxy. `VideoFrameSource` uses the proxy so `read_bgr(index)` is exact. For **sequences**, indices are always exact (numbered TIFF files).
 
 ### Color space convention
 
@@ -57,8 +62,12 @@ OpenCV reads BGR. Qt and the crop/export pipeline use RGB. Conversion happens at
 ### Module responsibilities
 
 - `proxy.py` — MJPEG transcoding; `ensure_proxy()` is the only public entry point
-- `tracking_engine.py` — stateless-ish tracker; holds template and previous center
-- `video_exporter.py` — `export_video` (crop) and `export_stabilized` (full frame warp); both read from `video_path`
-- `stabilizer.py` — single-function translation warp used by `export_stabilized`
+- `image_sequence.py` — discover/sort/decode RAW folders (`rawpy`)
+- `intermediate.py` — cached 16-bit RGB TIFF sequence + `manifest.json`
+- `frame_source.py` — `VideoFrameSource` / `SequenceFrameSource`
+- `raw_transform.py` — integer Bayer translate/crop; shared geometry with RGB export
+- `tracking_engine.py` — template matcher; holds template and previous center
+- `video_exporter.py` — video MP4 export + `export_*_sequence` for stills
+- `stabilizer.py` — translation warp; uses `stabilization_translation()` from `raw_transform`
 - `video_player.py` — `QLabel` subclass that paints the scaled video frame plus overlays and emits `roi_selected` / `point_selected` signals
 - `crop_canvas.py` — `QLabel` subclass showing the crop preview; receives either a raw frame region or a pre-blended canvas
