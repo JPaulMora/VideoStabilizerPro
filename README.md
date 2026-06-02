@@ -2,9 +2,9 @@
 
 This is a minimal requirements, purely Python based video stabilizer program. I created this to produce "consumer" grade astro photography videos out of my very amateur attempts at recording Jupiter from my iPhone 13 Pro.
 
-Below I share a simple UI demo, but you can also find the raw video and my prefered output within this repo.
+Below is a short UI demo ([full video with audio](UI%20Demo.mp4)):
 
-https://raw.githubusercontent.com/JPaulMora/VideoStabilizerPro/refs/heads/main/UI%20Demo.mp4
+![UI demo](docs/ui-demo.gif)
 
 ---
 
