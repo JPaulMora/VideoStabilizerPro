@@ -20,6 +20,8 @@ import video_exporter
 from video_exporter import extract_crop
 from tracking_engine import TrackingEngine, TrackingLostError
 from proxy import ensure_proxy, proxy_path_for
+from intermediate import ensure_intermediate
+from frame_source import FrameSource, VideoFrameSource, SequenceFrameSource
 
 BUTTON_STYLE = """
     QPushButton {
@@ -106,9 +108,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 750)
 
         # Playback state
-        self.cap = None
-        self.video_path = None   # original source — used for export only
-        self.proxy_path = None   # MJPEG proxy — used for cap / tracking
+        self.frame_source: Optional[FrameSource] = None
+        self.source_kind: str = "video"  # "video" | "sequence"
+        self.source_path = None   # video file or RAW folder — used for export
+        self.video_path = None    # alias kept for export paths (same as source_path)
+        self.proxy_path = None    # MJPEG proxy (video only)
+        self.intermediate_dir = None  # decoded TIFF cache (sequence only)
         self.points = {}
         self._manual_frames: set = set()
         self.total_frames = 0
@@ -170,6 +175,11 @@ class MainWindow(QMainWindow):
         load_video_btn.setStyleSheet(BUTTON_STYLE)
         load_video_btn.clicked.connect(self._on_load_video)
         sidebar_layout.addWidget(load_video_btn)
+
+        load_sequence_btn = QPushButton("Load Image Sequence")
+        load_sequence_btn.setStyleSheet(BUTTON_STYLE)
+        load_sequence_btn.clicked.connect(self._on_load_sequence)
+        sidebar_layout.addWidget(load_sequence_btn)
 
         load_csv_btn = QPushButton("Load CSV")
         load_csv_btn.setStyleSheet(BUTTON_STYLE)
@@ -282,6 +292,16 @@ class MainWindow(QMainWindow):
         self.export_size_combo.setStyleSheet(COMBO_STYLE)
         sidebar_layout.addWidget(self.export_size_combo)
 
+        self.export_rgb_check = QCheckBox("Export RGB TIFF")
+        self.export_rgb_check.setStyleSheet("color: #cdd6f4; font-size: 13px;")
+        self.export_rgb_check.setChecked(True)
+        sidebar_layout.addWidget(self.export_rgb_check)
+
+        self.export_raw_check = QCheckBox("Export Bayer TIFF (integer shift)")
+        self.export_raw_check.setStyleSheet("color: #cdd6f4; font-size: 13px;")
+        self.export_raw_check.setChecked(True)
+        sidebar_layout.addWidget(self.export_raw_check)
+
         self.export_btn = QPushButton("Export")
         self.export_btn.setStyleSheet(BUTTON_STYLE)
         self.export_btn.clicked.connect(self._on_export)
@@ -380,6 +400,16 @@ class MainWindow(QMainWindow):
         if path:
             self._load_video(path)
 
+    def _on_load_sequence(self):
+        path = QFileDialog.getExistingDirectory(self, "Open Image Sequence", "")
+        if path:
+            self._load_sequence(path)
+
+    def _close_frame_source(self):
+        if self.frame_source is not None:
+            self.frame_source.close()
+            self.frame_source = None
+
     def _on_load_csv(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open CSV", "/Users/nimble./Projects/VideoStPro",
@@ -390,9 +420,11 @@ class MainWindow(QMainWindow):
             self._update_tracking_range_bar()
 
     def _load_video(self, path: str):
-        if self.cap:
-            self.cap.release()
+        self._close_frame_source()
+        self.source_kind = "video"
+        self.source_path = path
         self.video_path = path
+        self.intermediate_dir = None
 
         # Build (or reuse) an MJPEG proxy so every cap.set(N) is exact
         progress_dlg = QProgressDialog(
@@ -412,9 +444,41 @@ class MainWindow(QMainWindow):
         self.proxy_path = ensure_proxy(path, progress_cb=_proxy_progress)
         progress_dlg.close()
 
-        self.cap = cv2.VideoCapture(self.proxy_path)
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
+        cap = cv2.VideoCapture(self.proxy_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        cap.release()
+        self.frame_source = VideoFrameSource(self.proxy_path)
+        self._setup_playback_after_load(fps=fps)
+
+    def _load_sequence(self, path: str):
+        self._close_frame_source()
+        self.source_kind = "sequence"
+        self.source_path = path
+        self.video_path = path
+        self.proxy_path = None
+
+        progress_dlg = QProgressDialog(
+            "Building decoded TIFF intermediate for sequence…", None, 0, 100, self
+        )
+        progress_dlg.setWindowTitle("Decoding RAW sequence")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumWidth(340)
+        progress_dlg.setValue(0)
+        progress_dlg.show()
+
+        def _progress(current, total):
+            pct = int(current / total * 100) if total else 100
+            progress_dlg.setValue(pct)
+            QApplication.processEvents()
+
+        self.intermediate_dir = ensure_intermediate(path, progress_cb=_progress)
+        progress_dlg.close()
+
+        self.frame_source = SequenceFrameSource(self.intermediate_dir)
+        self._setup_playback_after_load(fps=30.0)
+
+    def _setup_playback_after_load(self, fps: float = 30.0):
+        self.total_frames = self.frame_source.frame_count()
         self.timer.setInterval(int(1000 / fps))
         self._slider_updating = True
         self.frame_slider.setRange(0, max(0, self.total_frames - 1))
@@ -458,7 +522,7 @@ class MainWindow(QMainWindow):
         self._seek_frame(min(self.total_frames - 1, self.current_frame_idx + 1))
 
     def _play(self):
-        if not self.cap:
+        if not self.frame_source:
             return
         self.is_playing = True
         self.play_pause_btn.setText("⏸")
@@ -487,38 +551,38 @@ class MainWindow(QMainWindow):
         self._seek_frame(idx)
 
     def _seek_frame(self, idx: int):
-        if not self.cap:
+        if not self.frame_source:
             return
         if self.show_prev_overlay_check.isChecked() and idx > 0 and self._prev_frame_idx != idx - 1:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx - 1)
-            ret_p, prev_bgr = self.cap.read()
-            if ret_p:
+            prev_bgr = self.frame_source.read_bgr(idx - 1)
+            if prev_bgr is not None:
                 self._prev_frame_rgb = cv2.cvtColor(prev_bgr, cv2.COLOR_BGR2RGB)
                 self._prev_frame_idx = idx - 1
             else:
                 self._prev_frame_rgb = None
                 self._prev_frame_idx = -1
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = self.cap.read()
-        if ret:
+        frame = self.frame_source.read_bgr(idx)
+        if frame is not None:
             self._current_frame_bgr = frame
-            # Use the actual decoded position, not the requested idx — H.264
-            # seeks snap to keyframes so the returned frame may differ from idx
-            self.current_frame_idx = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            self.current_frame_idx = idx
             self._slider_updating = True
             self.frame_slider.setValue(self.current_frame_idx)
             self._slider_updating = False
             self._render_frame(frame)
 
     def _advance_frame(self):
-        if not self.cap or not self.is_playing:
+        if not self.frame_source or not self.is_playing:
             return
-        ret, frame = self.cap.read()
-        if not ret:
+        next_idx = self.current_frame_idx + 1
+        if next_idx >= self.total_frames:
+            self._pause()
+            return
+        frame = self.frame_source.read_bgr(next_idx)
+        if frame is None:
             self._pause()
             return
         self._current_frame_bgr = frame
-        self.current_frame_idx = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+        self.current_frame_idx = next_idx
         self._slider_updating = True
         self.frame_slider.setValue(self.current_frame_idx)
         self._slider_updating = False
@@ -574,14 +638,8 @@ class MainWindow(QMainWindow):
         self.frame_total_label.setText(f"/ {self.total_frames}")
 
     def _on_mode_changed(self):
-        if not self.cap:
-            return
-        pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_idx)
-        ret, frame = self.cap.read()
-        if ret:
-            self._render_frame(frame)
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+        if self._current_frame_bgr is not None:
+            self._render_frame(self._current_frame_bgr)
 
     # --- Canvas size ---
 
@@ -613,7 +671,7 @@ class MainWindow(QMainWindow):
     def _on_export_csv(self):
         if not self.points:
             return
-        stem = os.path.splitext(os.path.basename(self.video_path or "tracking"))[0]
+        stem = self._source_stem() or "tracking"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_name = f"{stem}_{ts}.csv"
         path, _ = QFileDialog.getSaveFileName(
@@ -628,14 +686,25 @@ class MainWindow(QMainWindow):
             for i, (frame, (px, py)) in enumerate(sorted(self.points.items())):
                 writer.writerow([i, frame, px, py])
 
+    def _source_stem(self) -> str:
+        if not self.source_path:
+            return ""
+        if self.source_kind == "sequence":
+            return os.path.basename(self.source_path.rstrip(os.sep))
+        return os.path.splitext(os.path.basename(self.source_path))[0]
+
     def _on_export(self):
-        if not self.cap or not self.video_path:
+        if not self.frame_source or not self.source_path:
             return
         original = self.export_size_combo.currentIndex() == 1
         if original and (not self.tracking_engine.has_template or not self.points):
             return
 
-        stem = os.path.splitext(os.path.basename(self.video_path or "export"))[0]
+        if self.source_kind == "sequence":
+            self._export_sequence(original)
+            return
+
+        stem = self._source_stem() or "export"
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_name = f"{stem}_{ts}.mp4"
         out_path, _ = QFileDialog.getSaveFileName(
@@ -661,13 +730,68 @@ class MainWindow(QMainWindow):
 
         if original:
             video_exporter.export_stabilized(
-                self.video_path, out_path, self.points,
+                self.source_path, out_path, self.points,
                 self.tracking_engine.reference_center, progress_cb,
             )
         else:
             video_exporter.export_video(
-                self.video_path, out_path, self.points,
+                self.source_path, out_path, self.points,
                 self.crop_w, self.crop_h, self.center_radio.isChecked(), progress_cb,
+            )
+
+        export_dlg.close()
+        self.export_btn.setEnabled(True)
+        self._seek_frame(saved_idx)
+        self.frame_input.setText(str(saved_idx))
+
+    def _export_sequence(self, original: bool):
+        export_rgb = self.export_rgb_check.isChecked()
+        export_raw = self.export_raw_check.isChecked()
+        if not export_rgb and not export_raw:
+            return
+
+        stem = self._source_stem() or "export"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_dir = os.path.join(
+            os.path.dirname(self.source_path),
+            f"{stem}_{ts}",
+        )
+        out_dir = QFileDialog.getExistingDirectory(
+            self, "Export Sequence To Folder", default_dir,
+        )
+        if not out_dir:
+            return
+
+        self.export_btn.setEnabled(False)
+        saved_idx = self.current_frame_idx
+
+        export_dlg = QProgressDialog("Exporting still sequence…", None, 0, 100, self)
+        export_dlg.setWindowTitle("Exporting sequence")
+        export_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        export_dlg.setMinimumWidth(300)
+        export_dlg.setValue(0)
+        export_dlg.show()
+
+        def progress_cb(i, total):
+            pct = int(i / total * 100) if total else 100
+            export_dlg.setValue(pct)
+            QApplication.processEvents()
+
+        ref = self.tracking_engine.reference_center
+        use_center = self.center_radio.isChecked()
+
+        if original:
+            video_exporter.export_stabilized_sequence(
+                self.intermediate_dir, out_dir, self.points, ref,
+                export_rgb=export_rgb, export_raw=export_raw,
+                progress_cb=progress_cb,
+            )
+        else:
+            video_exporter.export_crop_sequence(
+                self.intermediate_dir, out_dir, self.points, ref,
+                self.crop_w, self.crop_h, use_center,
+                export_rgb=export_rgb, export_raw=export_raw,
+                progress_cb=progress_cb,
             )
 
         export_dlg.close()
@@ -687,17 +811,17 @@ class MainWindow(QMainWindow):
                                               self._manual_frames)
 
     def _on_show_prev_overlay_toggled(self):
-        if self.cap:
+        if self.frame_source:
             self._seek_frame(self.current_frame_idx)
 
     def _on_tracking_toggled(self, checked: bool):
         self.tracking_mode = checked
         self.video_player.set_tracking_mode(checked)
-        if self.cap:
+        if self.frame_source:
             self._seek_frame(self.current_frame_idx)
 
     def _on_roi_selected(self, x: int, y: int, w: int, h: int):
-        if not self.cap or self._current_frame_bgr is None:
+        if not self.frame_source or self._current_frame_bgr is None:
             return
         self.tracking_engine.set_template(self._current_frame_bgr, (x, y, w, h))
         self._template_frame_idx = self.current_frame_idx
@@ -728,7 +852,7 @@ class MainWindow(QMainWindow):
         self._render_frame(self._current_frame_bgr)
 
     def _run_tracking(self):
-        if not self.proxy_path or not self.tracking_engine.has_template:
+        if not self.frame_source or not self.tracking_engine.has_template:
             return
         # Stop regular playback timer but mark as "running" so pause button stops tracking
         self.timer.stop()
@@ -749,14 +873,12 @@ class MainWindow(QMainWindow):
         self._update_tracking_range_bar()
 
         self.run_tracking_btn.setEnabled(False)
-        cap = cv2.VideoCapture(self.proxy_path)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        total = self.frame_source.frame_count()
 
         stopped_at = None
         for i in range(start_frame, total):
-            ret, frame_bgr = cap.read()
-            if not ret:
+            frame_bgr = self.frame_source.read_bgr(i)
+            if frame_bgr is None:
                 break
             try:
                 r = self.tracking_engine.track_frame(frame_bgr)
@@ -808,7 +930,6 @@ class MainWindow(QMainWindow):
             if not self.is_playing:
                 break
 
-        cap.release()
         self.run_tracking_btn.setEnabled(True)
         self._update_tracking_range_bar()
 
@@ -847,8 +968,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.timer.stop()
-        if self.cap:
-            self.cap.release()
+        self._close_frame_source()
         super().closeEvent(event)
 
 
